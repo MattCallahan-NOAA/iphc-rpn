@@ -53,14 +53,14 @@
 # Set up ----
 
 # '%nin%' <- Negate('%in%')
-libs <- c("tidyverse", "rgdal", "lubridate")
+libs <- c("tidyverse", "lubridate", "sf", "pak")
 if(length(libs[which(libs %in% rownames(installed.packages()) == FALSE )]) > 0) {
   install.packages(libs[which(libs %in% rownames(installed.packages()) == FALSE)])}
 lapply(libs, library, character.only = TRUE)
 
 # User defined variable
 FIRST_YEAR <- 1998 # first year of survey data used (currently exclude 1997)
-YEAR <- 2022 # most recent year of data
+YEAR <- 2024 # most recent year of data
 
 # Read data ----
 
@@ -430,6 +430,20 @@ set <- set %>%
                               avgdep_m >= 400 ~ 400))
 
 # NMFS areas ----
+
+# MC note: Spatial processing in R has come a long way since poor Jordan had to wrangle spatial polygons.
+# New code uses sf package and sources nmfs areas from akgfmaps
+
+#pak::pkg_install("afsc-gap-products/akgfmaps")
+library(akgfmaps)
+# Get the NMFS areas from akgfmaps
+nmfs<-get_nmfs_areas(set.crs<-4326)
+
+# convert set to spatial object
+set2 <- set %>%
+  group_by(fishing_event_id)
+  mutate(lon = startlon, lat = startlat) %>%
+  st_as
 
 # Original code from Jordan Watson
 

@@ -7,7 +7,7 @@
 
 # Set up ----
 
-libs <- c("tidyverse", "RODBC", "lubridate")
+libs <- c("tidyverse", "RODBC", "lubridate", "odbc", "DBI", "getPass")
 if(length(libs[which(libs %in% rownames(installed.packages()) == FALSE )]) > 0) {install.packages(libs[which(libs %in% rownames(installed.packages()) == FALSE)])}
 lapply(libs, library, character.only = TRUE)
 
@@ -17,8 +17,9 @@ username_akfin=db$username
 password_akfin=db$password
 
 channel_akfin <- odbcConnect("akfin", uid = username_akfin, pwd = password_akfin, believeNRows=FALSE)
-
-YEAR <- 2022
+# connect to AKFIN
+channel_akfin <- dbConnect(odbc::odbc(), "akfin", UID=getPass(msg="USER NAME"), PWD=getPass())
+YEAR <- 2024
 
 datpath <- paste0("data/", YEAR)
 dir.create(datpath)
@@ -31,7 +32,8 @@ dir.create(outpath)
 
 # previously 'AllSpecies -> bycatch sheet', though there are additional columns
 # in iphc.fiss_non_p_halb and things are formatted a little differently
-nonhal <- sqlQuery(channel_akfin, query = ("
+#nonhal <- sqlQuery(channel_akfin, query = ("
+nonhal <- dbGetQuery(channel_akfin, statement = ("
                 select    *
                 from      iphc.fiss_non_p_halb
                 ")) %>% 
@@ -44,7 +46,8 @@ nonhal
 
 # previously 'AllSpecies -> Set Info sheet', though there are additional columns
 # in iphc.fiss_set_p_halb and things are formatted a little differently)
-set <- sqlQuery(channel_akfin, query = ("
+#set <- sqlQuery(channel_akfin, query = ("
+set  <- dbGetQuery(channel_akfin, statement = ("
                 select    *
                 from      iphc.fiss_set_p_halb
                 ")) %>% 
@@ -55,7 +58,7 @@ write_csv(set, paste0(rawpath, "/raw_iphc_set_", YEAR, ".csv")) # write raw data
 # metadata ----
 
 # pull this every year in case it changes
-metadata <- sqlQuery(channel_akfin, query = ("
+metadata <- dbGetQuery(channel_akfin, statement = ("
                 select    *
                 from      iphc.fiss_metadata
                 ")) %>% 
@@ -66,7 +69,7 @@ write_csv(metadata, paste0(rawpath, "/iphc_metadata_", YEAR, ".csv")) # write ra
 # station codes ----
 
 # pull this every year in case it changes
-station_codes <- sqlQuery(channel_akfin, query = ("
+station_codes <- dbGetQuery(channel_akfin, statement = ("
                 select    *
                 from      iphc.fiss_prp_codes
                 ")) %>% 

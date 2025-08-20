@@ -53,7 +53,7 @@
 # Set up ----
 
 # '%nin%' <- Negate('%in%')
-libs <- c("tidyverse", "lubridate", "sf", "pak")
+libs <- c("tidyverse", "lubridate", "sf")
 if(length(libs[which(libs %in% rownames(installed.packages()) == FALSE )]) > 0) {
   install.packages(libs[which(libs %in% rownames(installed.packages()) == FALSE)])}
 lapply(libs, library, character.only = TRUE)
@@ -435,141 +435,195 @@ set <- set %>%
 # New code uses sf package and sources nmfs areas from akgfmaps
 
 #pak::pkg_install("afsc-gap-products/akgfmaps")
-library(akgfmaps)
+#library(akgfmaps)
 # Get the NMFS areas from akgfmaps
-nmfs<-get_nmfs_areas(set.crs<-4326)
+#nmfs<-get_nmfs_areas(set.crs=4326) 
+
+nmfs <- st_read("data/shapefiles/gf95_nmfs", "gf95_nmfs_polygon") %>%
+  st_transform(crs=4326)
+
+ggplot()+
+  geom_sf(data=nmfs %>% st_shift_longitude())
 
 # convert set to spatial object
 set2 <- set %>%
-  group_by(fishing_event_id)
-  mutate(lon = startlon, lat = startlat) %>%
-  st_as
+  distinct(fishing_event_id, startlat, startlon)
+
+set2 <- set2 %>% st_as_sf(coords=c("startlon", "startlat"), crs=4326)
+
+set2<-st_join(set2, nmfs, join = st_within)
+#plot
+ggplot()+
+  geom_sf(data=set2%>%st_shift_longitude(), aes(color=NMFS_AREA), size=1)
+# look for NAs and missassigned 0s
+
+ggplot()+
+  geom_sf(data=nmfs%>%st_shift_longitude())+
+  #geom_sf_text(data=nmfs%>%st_shift_longitude(), aes(label=NMFS_AREA))+
+  geom_sf_label(data=set2%>%
+                  st_shift_longitude()%>%
+                  filter(is.na(NMFS_AREA) | NMFS_AREA==0), color="red", aes(label=fishing_event_id), size=3)
+
+# looks like three points in 659 and one in 541 did not assign correctly (probably coords are on land)
+# Weird that they are different than the ones Jane gave us.
+# Note that the NMFS shapefile from AKGFMAPS lists these as incorrect, but not some of the below: 2010_3032", "2021_3212",
+set2 <-set2 %>%
+  mutate(NMFS_AREA=case_when(fishing_event_id %in% c("2017_6604","2021_6607") ~ 541,
+                             fishing_event_id %in% c("2018_3216","2000_3032",  "2021_3230") ~ 659,
+                             is.na(NMFS_AREA) ~ 0, # For canadian logic later on.
+                             .default = NMFS_AREA))
+#verify
+ggplot()+
+  geom_sf(data=nmfs%>%st_shift_longitude())+
+  geom_sf(data=set2%>%
+                  st_shift_longitude()%>%
+                  filter(is.na(NMFS_AREA) | NMFS_AREA==0), color="red",  size=1)
+
+
+# join into main data
+set <- set %>%
+  left_join(set2 %>%
+              as.data.frame() %>%
+              #mutate(NMFS_AREA = REP_AREA) %>%
+              dplyr::select(NMFS_AREA, fishing_event_id), by="fishing_event_id")
+
+
+
+# looks like it's 2c that's the problem
+
+set %>%
+  distinct(NMFS_AREA, iphcreg) %>%
+  arrange(NMFS_AREA) %>%
+  print(n=Inf)
+
+
 
 # Original code from Jordan Watson
 
-sp_data <- readOGR(dsn = "data/shapefiles/gf95_nmfs",layer = "gf95_nmfs_polygon")
-
-plot(sp_data)
-axis(1); axis(2)
-
-# Create smaller set dataframe without extra cols
-set_sm <- set %>% 
-  select(lon = startlon, lat = startlat, fishing_event_id) %>% 
-  data.frame()
-
-# Setting existing coordinate as lat-long system
-coords <- SpatialPointsDataFrame(coords = set_sm[, c(1, 2)], 
-                                  data = set_sm,
-                                  proj4string = CRS("+proj=longlat"))
-
-# Transforming coordinate to UTM using the built in projection data from the sp.data shapefile.
-# If you aren't familiar, you can open the .prj file as text to see what info this includes.
-coords <- spTransform(coords, CRS(proj4string(sp_data)))
-
-points(coords[ , c(1, 2)], col = "red") # this shows where those new stations are on the map
-
-# Run the over command. Could do this not as a list - probably an extra step
-# here that could be omitted in the future.
-coords <- over(sp_data, coords, returnList = TRUE)          
-# tst <- over(coords, sp_data)          
-
-# Convert the output list to a data frame where the name of the index value
-# that was matched is saved as a field called "index"
-coords <- Reduce(rbind, lapply(names(coords), function(x) coords[[x]] %>% 
-                               transmute(lon, lat, fishing_event_id, index = x)))
-
-# Join spatial data from shapefile (which includes the nmfs area names). Note
-# that the index values start with a zero because the shapefile matching
-# function apparently counts the first row of data as the zero'th row
-coords_nmfs <- sp_data@data %>% 
-  rownames_to_column(var = "index") %>% 
-  mutate(index = as.character(index),
-         nmfs = NMFS_AREA) %>% 
-  dplyr::select(nmfs, index) %>% 
-  full_join(coords)
-
-#the above creates a lot of zero rows, so clean all that out
-coords_nmfs <- coords_nmfs[!is.na(coords_nmfs$fishing_event_id), ]
-
-#what remains should only be stations that are within NMFS areas, take a look to double check
-plot(sp_data)
-axis(1); axis(2)
-
-coords_nmfs2 <- SpatialPointsDataFrame(coords = coords_nmfs[ , c(3, 4)], 
-                                 data = coords_nmfs,
-                                 proj4string = CRS("+proj=longlat"))
-
-coords_nmfs2 <- spTransform(coords_nmfs2, CRS(proj4string(sp_data)))
-points(coords_nmfs2[ , c(1, 2)], col = "red") # should = NMFS areas
-
-# tmp <- coords_nmfs2[coords_nmfs2$fishing_event_id %in% check_3A_CAN,]
-# points(tmp[ , c(1, 2)], col = "green") # this shows where those new stations are on the map
-
-# check for fishing events that didn't get NMFS area information assigned
-# properly
-unique(coords_nmfs[coords_nmfs$nmfs == 0, ]$fishing_event_id)
-plot(sp_data)
-
-# NMFS Area 659 (Inside), correct in 2018All_species_full_survey.csv
-# points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2018_3216", c(1,2)], pch = 20, col = "green")
-# points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2000_3032", c(1,2)], pch = 20, col = "red")
-# points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2010_3032", c(1,2)], col = "pink")
-# coords_nmfs[coords_nmfs$fishing_event_id %in% c("2018_3216", "2000_3032", "2010_3032"), ]$nmfs <- 659 (old)
-
-# manually assigned in 2021 by plotting each of these points manually, example code above.
-coords_nmfs[coords_nmfs$fishing_event_id %in% c("2021_3230", "2018_3216", "2000_3032"), ]$nmfs <- 659 # SEI
-coords_nmfs[coords_nmfs$fishing_event_id %in% c("2021_6607", "2017_6604"), ]$nmfs <- 541 # eastern AI
-
-# NFMS Area 610 (WGOA), correct in 2018All_species_full_survey.csv. (old)
-# points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2005_6055", c(1,2)], pch = 20, col = "orange")
-# coords_nmfs[coords_nmfs$fishing_event_id %in% c("2005_6055"), ]$nmfs <- 610
-
-# Identified as Canada in 2018All_species_full_survey.csv. This should be NMFS
-# area 541 
-# points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2017_6604", c(1,2)], pch = 20, col = "blue")
-# coords_nmfs[coords_nmfs$fishing_event_id %in% c("2017_6604"), ]$nmfs <- 541
-
-# next verify that all of the station dumped in the above steps are actually in
-# Canada
-lost_st <- merge(set_sm, coords_nmfs, by = c("fishing_event_id", "lon", "lat"), all = TRUE)
-lost_st <- lost_st[is.na(lost_st$nmfs), ]
-nrow(set_sm) - nrow(coords_nmfs) == nrow(lost_st) # should be TRUE
-
-plot(sp_data)
-axis(1); axis(2)
-
-lost_st <- SpatialPointsDataFrame(coords = lost_st[ ,c(2, 3)], 
-                                 data = lost_st,
-                                 proj4string = CRS("+proj=longlat"))
-temp_lost <- spTransform(lost_st, CRS(proj4string(sp_data)))
-points(temp_lost[ , c(1,2)], col="red") # should = Canada
-
-# if none of the above stations appear to be within NMFS areas (will deal with
-# Puget Sound later in the code) then assign all of them to NMFS area = 0
-lost_st$nmfs <- 0
-
-# combine NMFS area stations with Canada stations
-coords_canada <- as.data.frame(lost_st) %>% 
-  select(nmfs, index, lon, lat, fishing_event_id)
-coords <- rbind(coords_nmfs, coords_canada)
-
-# Are any fishing events linked to multiple NMFS areas?
-coords %>% 
-  group_by(fishing_event_id) %>% 
-  summarize(n_nmfs_areas = n_distinct(nmfs)) %>% 
-  filter(n_nmfs_areas > 1) -> problem_stations
-problem_stations #%>% View() #should be none
-
-# Combine NMFS areas into full data set, get rid of extraneous rows created
-# during spatial matching process
-set <- coords %>% 
-  distinct(fishing_event_id, NMFS_AREA = nmfs) %>% 
-  right_join(set)
+# sp_data <- readOGR(dsn = "data/shapefiles/gf95_nmfs",layer = "gf95_nmfs_polygon")
+# 
+# plot(sp_data)
+# axis(1); axis(2)
+# 
+# # Create smaller set dataframe without extra cols
+# set_sm <- set %>% 
+#   select(lon = startlon, lat = startlat, fishing_event_id) %>% 
+#   data.frame()
+# 
+# # Setting existing coordinate as lat-long system
+# coords <- SpatialPointsDataFrame(coords = set_sm[, c(1, 2)], 
+#                                   data = set_sm,
+#                                   proj4string = CRS("+proj=longlat"))
+# 
+# # Transforming coordinate to UTM using the built in projection data from the sp.data shapefile.
+# # If you aren't familiar, you can open the .prj file as text to see what info this includes.
+# coords <- spTransform(coords, CRS(proj4string(sp_data)))
+# 
+# points(coords[ , c(1, 2)], col = "red") # this shows where those new stations are on the map
+# 
+# # Run the over command. Could do this not as a list - probably an extra step
+# # here that could be omitted in the future.
+# coords <- over(sp_data, coords, returnList = TRUE)          
+# # tst <- over(coords, sp_data)          
+# 
+# # Convert the output list to a data frame where the name of the index value
+# # that was matched is saved as a field called "index"
+# coords <- Reduce(rbind, lapply(names(coords), function(x) coords[[x]] %>% 
+#                                transmute(lon, lat, fishing_event_id, index = x)))
+# 
+# # Join spatial data from shapefile (which includes the nmfs area names). Note
+# # that the index values start with a zero because the shapefile matching
+# # function apparently counts the first row of data as the zero'th row
+# coords_nmfs <- sp_data@data %>% 
+#   rownames_to_column(var = "index") %>% 
+#   mutate(index = as.character(index),
+#          nmfs = NMFS_AREA) %>% 
+#   dplyr::select(nmfs, index) %>% 
+#   full_join(coords)
+# 
+# #the above creates a lot of zero rows, so clean all that out
+# coords_nmfs <- coords_nmfs[!is.na(coords_nmfs$fishing_event_id), ]
+# 
+# #what remains should only be stations that are within NMFS areas, take a look to double check
+# plot(sp_data)
+# axis(1); axis(2)
+# 
+# coords_nmfs2 <- SpatialPointsDataFrame(coords = coords_nmfs[ , c(3, 4)], 
+#                                  data = coords_nmfs,
+#                                  proj4string = CRS("+proj=longlat"))
+# 
+# coords_nmfs2 <- spTransform(coords_nmfs2, CRS(proj4string(sp_data)))
+# points(coords_nmfs2[ , c(1, 2)], col = "red") # should = NMFS areas
+# 
+# # tmp <- coords_nmfs2[coords_nmfs2$fishing_event_id %in% check_3A_CAN,]
+# # points(tmp[ , c(1, 2)], col = "green") # this shows where those new stations are on the map
+# 
+# # check for fishing events that didn't get NMFS area information assigned
+# # properly
+# unique(coords_nmfs[coords_nmfs$nmfs == 0, ]$fishing_event_id)
+# plot(sp_data)
+# 
+# # NMFS Area 659 (Inside), correct in 2018All_species_full_survey.csv
+# # points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2018_3216", c(1,2)], pch = 20, col = "green")
+# # points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2000_3032", c(1,2)], pch = 20, col = "red")
+# # points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2010_3032", c(1,2)], col = "pink")
+# # coords_nmfs[coords_nmfs$fishing_event_id %in% c("2018_3216", "2000_3032", "2010_3032"), ]$nmfs <- 659 (old)
+# 
+# # manually assigned in 2021 by plotting each of these points manually, example code above.
+# coords_nmfs[coords_nmfs$fishing_event_id %in% c("2021_3230", "2018_3216", "2000_3032"), ]$nmfs <- 659 # SEI
+# coords_nmfs[coords_nmfs$fishing_event_id %in% c("2021_6607", "2017_6604"), ]$nmfs <- 541 # eastern AI
+# 
+# # NFMS Area 610 (WGOA), correct in 2018All_species_full_survey.csv. (old)
+# # points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2005_6055", c(1,2)], pch = 20, col = "orange")
+# # coords_nmfs[coords_nmfs$fishing_event_id %in% c("2005_6055"), ]$nmfs <- 610
+# 
+# # Identified as Canada in 2018All_species_full_survey.csv. This should be NMFS
+# # area 541 
+# # points(coords_nmfs2[coords_nmfs2$fishing_event_id == "2017_6604", c(1,2)], pch = 20, col = "blue")
+# # coords_nmfs[coords_nmfs$fishing_event_id %in% c("2017_6604"), ]$nmfs <- 541
+# 
+# # next verify that all of the station dumped in the above steps are actually in
+# # Canada
+# lost_st <- merge(set_sm, coords_nmfs, by = c("fishing_event_id", "lon", "lat"), all = TRUE)
+# lost_st <- lost_st[is.na(lost_st$nmfs), ]
+# nrow(set_sm) - nrow(coords_nmfs) == nrow(lost_st) # should be TRUE
+# 
+# plot(sp_data)
+# axis(1); axis(2)
+# 
+# lost_st <- SpatialPointsDataFrame(coords = lost_st[ ,c(2, 3)], 
+#                                  data = lost_st,
+#                                  proj4string = CRS("+proj=longlat"))
+# temp_lost <- spTransform(lost_st, CRS(proj4string(sp_data)))
+# points(temp_lost[ , c(1,2)], col="red") # should = Canada
+# 
+# # if none of the above stations appear to be within NMFS areas (will deal with
+# # Puget Sound later in the code) then assign all of them to NMFS area = 0
+# lost_st$nmfs <- 0
+# 
+# # combine NMFS area stations with Canada stations
+# coords_canada <- as.data.frame(lost_st) %>% 
+#   select(nmfs, index, lon, lat, fishing_event_id)
+# coords <- rbind(coords_nmfs, coords_canada)
+# 
+# # Are any fishing events linked to multiple NMFS areas?
+# coords %>% 
+#   group_by(fishing_event_id) %>% 
+#   summarize(n_nmfs_areas = n_distinct(nmfs)) %>% 
+#   filter(n_nmfs_areas > 1) -> problem_stations
+# problem_stations #%>% View() #should be none
+# 
+# # Combine NMFS areas into full data set, get rid of extraneous rows created
+# # during spatial matching process
+# set <- coords %>% 
+#   distinct(fishing_event_id, NMFS_AREA = nmfs) %>% 
+#   right_join(set)
 
 # FMP ----
 
 # Join FMP, sub area, mgmt area info
-set <- set %>% left_join(fmp)
+set <- set %>% 
+  left_join(fmp)
 
 # Puget Sound & West Coast ----
 
@@ -625,6 +679,24 @@ set %>% filter(NMFS_AREA == 0) %>% distinct(FMP)
 # should only be station 2172, which is always in GOA waters and right on the
 # Dixon Entrance line -- leave as is
 set %>% filter(iphcreg == "2B" & NMFS_AREA == 650) %>% distinct(station)
+
+# Many this time.
+library(akgfmaps)
+#Get the NMFS areas from akgfmaps
+nmfsak<-get_nmfs_areas(set.crs=4326) 
+
+  ggplot()+
+    #geom_sf(data=nmfs, fill=NA)+
+    geom_sf(data=nmfsak, fill=NA, color="blue")+
+  geom_point(data=set %>%
+               filter(iphcreg == "2B" & NMFS_AREA == 650),
+             aes(x=startlon, y=startlat, color=as.character(station)))+
+    geom_text(data=set %>%
+                filter(iphcreg == "2B" & NMFS_AREA == 650),
+              aes(x=startlon, y=startlat, color=as.character(station), label=year))+
+    ylim(54,55)+xlim(-133.5,-131)
+
+  # it looks like they bumped up IPHC 2B last year. 
 
 # These stations in Inside waters SEAK have been problematic in the past. Double
 # check that there are no errors.
@@ -696,7 +768,7 @@ set %>% filter(is.na(RPN_strata) & is.na(FMP_sub_area))
 set <- set %>% 
   mutate(FMP_sub_area = ifelse(is.na(RPN_strata) & is.na(FMP_sub_area), "AI", FMP_sub_area))
 set %>% 
-  filter(is.na(RPN_strata) & year==2022 & FMP_sub_area == "AI") 
+  filter(is.na(RPN_strata) & year==2022 & FMP_sub_area == "AI") %>% print(width=Inf)
 
 # manually fix these five rows for 2022, knowing that the IPHC will likely fix
 # these errors in the future.

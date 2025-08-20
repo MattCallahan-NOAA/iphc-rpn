@@ -10,7 +10,7 @@ lapply(libs,library,character.only=T)
 
 # Range of years (important as we develop methods to incorporate years <= 1997)
 FIRST_YEAR <- 1998
-YEAR <- 2022
+YEAR <- 2024
 
 # Number of bootstrap replicates
 ITER <- 1500

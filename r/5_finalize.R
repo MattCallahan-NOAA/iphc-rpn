@@ -10,7 +10,7 @@ lapply(libs, library, character.only = TRUE)
 
 # Range of years (important as we develop methods to incorporate years <= 1997)
 FIRST_YEAR <- 1998
-YEAR <- 2022
+YEAR <- 2024
 
 mainfiles <- list.files(path = paste0('output/', YEAR))
 mainfiles <- mainfiles[!grepl('.png|.csv|ADFG', mainfiles)]
